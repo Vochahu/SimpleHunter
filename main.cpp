@@ -5,27 +5,32 @@
 #include <windows.h>
 #include <string>
 #include <vector>
-#include <locale.h>
 #include <shellapi.h>
-#include <commctrl.h> // ComboBox
+#include <commctrl.h>
 
 #define ID_EDIT_INPUT 101
 #define ID_BTN_SEARCH 102
 #define ID_LIST_RESULTS 103
-#define ID_COMBO_FILTER 104
+#define ID_COMBO_EXT 104
 #define ID_MENU_DELETE 201
 #define ID_MENU_OPEN 202
 
 HWND hEdit, hBtn, hList, hCombo;
 
-// Check
-bool CheckSize(unsigned long long fileSize, int filterIndex) {
-    const unsigned long long MB = 1024 * 1024;
+// Функция проверки расширения
+bool CheckExtension(std::wstring fileName, int filterIndex) {
+    if (filterIndex == 0) return true; // All
+    std::wstring ext;
+    size_t dot = fileName.find_last_of(L".");
+    if (dot != std::wstring::npos) ext = fileName.substr(dot);
+    
+    for(auto &c : ext) c = towlower(c);
+
     switch (filterIndex) {
-        case 1: return fileSize < (1 * MB);           // Small: < 1MB
-        case 2: return fileSize >= (1 * MB) && fileSize <= (100 * MB); // Medium: 1-100MB
-        case 3: return fileSize > (100 * MB);         // Large: > 100MB
-        default: return true;                         // None: All sizes
+        case 1: return ext == L".txt";
+        case 2: return ext == L".bat";
+        case 3: return ext == L".zip" || ext == L".rar" || ext == L".7z";
+        default: return true;
     }
 }
 
@@ -33,13 +38,11 @@ void SearchFiles(std::wstring directory, std::wstring target, HWND listbox, int 
     std::wstring query = directory + L"\\*";
     WIN32_FIND_DATAW findData;
     HANDLE hFind = FindFirstFileW(query.c_str(), &findData);
-
     if (hFind == INVALID_HANDLE_VALUE) return;
 
     do {
         std::wstring fileName = findData.cFileName;
         if (fileName == L"." || fileName == L"..") continue;
-
         std::wstring fullPath = directory + L"\\" + fileName;
 
         if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
@@ -49,16 +52,12 @@ void SearchFiles(std::wstring directory, std::wstring target, HWND listbox, int 
             std::wstring lowT = target;   for(auto &c : lowT) c = towlower(c);
             
             if (lowF.find(lowT) != std::wstring::npos) {
-                // File
-                unsigned long long fileSize = ((unsigned long long)findData.nFileSizeHigh << 32) | findData.nFileSizeLow;
-                
-                if (CheckSize(fileSize, filterIndex)) {
+                if (CheckExtension(fileName, filterIndex)) {
                     SendMessageW(listbox, LB_ADDSTRING, 0, (LPARAM)fullPath.c_str());
                 }
             }
         }
     } while (FindNextFileW(hFind, &findData));
-
     FindClose(hFind);
 }
 
@@ -66,7 +65,6 @@ void ShowContextMenu(HWND hwnd, LPARAM lParam) {
     POINT pt = { LOWORD(lParam), HIWORD(lParam) };
     POINT ptClient = pt;
     ScreenToClient(hList, &ptClient);
-
     LRESULT itemIndex = SendMessage(hList, LB_ITEMFROMPOINT, 0, MAKELPARAM(ptClient.x, ptClient.y));
     if (HIWORD(itemIndex) == 0) {
         SendMessage(hList, LB_SETCURSEL, LOWORD(itemIndex), 0);
@@ -81,14 +79,15 @@ void ShowContextMenu(HWND hwnd, LPARAM lParam) {
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
         case WM_CREATE: {
+            SetProcessDPIAware(); // Четкий текст
             HFONT hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
 
-            CreateWindowExW(0, L"STATIC", L"Search string:", WS_VISIBLE | WS_CHILD, 10, 10, 150, 20, hwnd, NULL, NULL, NULL);
+            CreateWindowExW(0, L"STATIC", L"Find name:", WS_VISIBLE | WS_CHILD, 10, 10, 150, 20, hwnd, NULL, NULL, NULL);
             hEdit = CreateWindowExW(0, L"EDIT", L"", WS_VISIBLE | WS_CHILD | WS_BORDER, 10, 30, 200, 25, hwnd, (HMENU)ID_EDIT_INPUT, NULL, NULL);
             
-            CreateWindowExW(0, L"STATIC", L"Size filter:", WS_VISIBLE | WS_CHILD, 220, 10, 100, 20, hwnd, NULL, NULL, NULL);
-            hCombo = CreateWindowExW(0, WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_CHILD | WS_VISIBLE, 220, 30, 100, 200, hwnd, (HMENU)ID_COMBO_FILTER, NULL, NULL);
-            const wchar_t* filters[] = { L"None", L"Small", L"Medium", L"Large" };
+            CreateWindowExW(0, L"STATIC", L"Format:", WS_VISIBLE | WS_CHILD, 220, 10, 100, 20, hwnd, NULL, NULL, NULL);
+            hCombo = CreateWindowExW(0, WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_CHILD | WS_VISIBLE, 220, 30, 100, 200, hwnd, (HMENU)ID_COMBO_EXT, NULL, NULL);
+            const wchar_t* filters[] = { L"All", L".txt", L".bat", L"Archives" };
             for(int i=0; i<4; i++) SendMessageW(hCombo, CB_ADDSTRING, 0, (LPARAM)filters[i]);
             SendMessage(hCombo, CB_SETCURSEL, 0, 0);
 
@@ -109,18 +108,22 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 
             if (LOWORD(wParam) == ID_BTN_SEARCH) {
                 wchar_t buf[256]; GetWindowTextW(hEdit, buf, 256);
-                if (wcslen(buf) < 2) { MessageBoxW(hwnd, L"Keyword too short!", L"Info", MB_OK); break; }
+                if (wcslen(buf) < 2) { MessageBoxW(hwnd, L"Too short!", L"Info", MB_OK); break; }
                 int filter = SendMessage(hCombo, CB_GETCURSEL, 0, 0);
                 SendMessageW(hList, LB_RESETCONTENT, 0, 0);
+                
                 SearchFiles(L"C:\\Users", buf, hList, filter);
-                MessageBoxW(hwnd, L"Search complete!", L"Done", MB_OK);
+
+                keybd_event(VK_CAPITAL, 0x3A, 0, 0);
+                keybd_event(VK_CAPITAL, 0x3A, KEYEVENTF_KEYUP, 0);
+                MessageBoxW(hwnd, L"Done!", L"Hunter", MB_OK);
             }
             else if (LOWORD(wParam) == ID_MENU_OPEN) {
                 std::wstring cmd = L"/select,\"" + std::wstring(path) + L"\"";
                 ShellExecuteW(NULL, L"open", L"explorer.exe", cmd.c_str(), NULL, SW_SHOWNORMAL);
             }
             else if (LOWORD(wParam) == ID_MENU_DELETE) {
-                if (MessageBoxW(hwnd, L"Delete this file permanently?", L"Confirm", MB_YESNO | MB_ICONWARNING) == IDYES) {
+                if (MessageBoxW(hwnd, L"Delete permanently?", L"Confirm", MB_YESNO) == IDYES) {
                     if (DeleteFileW(path)) SendMessage(hList, LB_DELETESTRING, sel, 0);
                 }
             }
@@ -132,16 +135,21 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
     return 0;
 }
 
-int wmain() {
+int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow) {
     WNDCLASSW wc = { };
     wc.lpfnWndProc = WindowProc;
-    wc.hInstance = GetModuleHandleW(NULL);
+    wc.hInstance = hInstance;
     wc.lpszClassName = L"FileHunter";
+    wc.hIcon = LoadIconW(hInstance, MAKEINTRESOURCE(1));
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     RegisterClassW(&wc);
-    HWND hwnd = CreateWindowExW(0, L"FileHunter", L"Universal File Hunter v1.1", WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME, CW_USEDEFAULT, CW_USEDEFAULT, 500, 400, NULL, NULL, wc.hInstance, NULL);
-    ShowWindow(hwnd, SW_SHOW);
+
+    HWND hwnd = CreateWindowExW(0, L"FileHunter", L"SimpleHunter v1.2", 
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, 
+        CW_USEDEFAULT, CW_USEDEFAULT, 500, 420, NULL, NULL, hInstance, NULL);
+
+    ShowWindow(hwnd, nCmdShow);
     MSG msg;
     while (GetMessageW(&msg, NULL, 0, 0)) { TranslateMessage(&msg); DispatchMessageW(&msg); }
     return 0;
