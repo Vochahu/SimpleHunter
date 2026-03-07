@@ -5,71 +5,138 @@
 #include <windows.h>
 #include <string>
 #include <vector>
-#include <shellapi.h>
 #include <commctrl.h>
+#include <shellapi.h>
 
+#pragma comment(lib, "comctl32.lib")
+#pragma comment(lib, "shell32.lib")
+
+// Константы ID
 #define ID_EDIT_INPUT 101
 #define ID_BTN_SEARCH 102
 #define ID_LIST_RESULTS 103
 #define ID_COMBO_EXT 104
-#define ID_MENU_DELETE 201
-#define ID_MENU_OPEN 202
+#define ID_BTN_FIX_SYSTEM 105
+#define ID_BTN_STARTUP 106
+#define ID_MENU_OPEN 201
+#define ID_MENU_DELETE 202
+#define ID_MENU_COPY 203
 
-HWND hEdit, hBtn, hList, hCombo;
+HWND hEdit, hList, hCombo, hFixBtn, hStartBtn;
+HFONT hGuiFont = NULL;
 
-// Функция проверки расширения
-bool CheckExtension(std::wstring fileName, int filterIndex) {
-    if (filterIndex == 0) return true; // All
-    std::wstring ext;
-    size_t dot = fileName.find_last_of(L".");
-    if (dot != std::wstring::npos) ext = fileName.substr(dot);
-    
-    for(auto &c : ext) c = towlower(c);
-
-    switch (filterIndex) {
-        case 1: return ext == L".txt";
-        case 2: return ext == L".bat";
-        case 3: return ext == L".zip" || ext == L".rar" || ext == L".7z";
-        default: return true;
+// Проверка прав Администратора
+bool IsRunAsAdmin() {
+    BOOL fRet = FALSE;
+    HANDLE hToken = NULL;
+    if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken)) {
+        TOKEN_ELEVATION elevation;
+        DWORD cbSize = sizeof(TOKEN_ELEVATION);
+        if (GetTokenInformation(hToken, TokenElevation, &elevation, sizeof(elevation), &cbSize)) {
+            fRet = elevation.TokenIsElevated;
+        }
     }
+    if (hToken) CloseHandle(hToken);
+    return fRet;
 }
 
+// Фильтрация расширений
+bool CheckExtension(std::wstring fileName, int filterIndex) {
+    if (filterIndex == 0) return true; // All
+    
+    size_t dot = fileName.find_last_of(L".");
+    if (dot == std::wstring::npos) return false;
+    
+    std::wstring ext = fileName.substr(dot);
+    for(auto &c : ext) c = towlower(c);
+
+    if (filterIndex == 1) return ext == L".txt";
+    if (filterIndex == 2) return ext == L".bat";
+    if (filterIndex == 3) { // Archives
+        return (ext == L".zip" || ext == L".rar" || ext == L".7z");
+    }
+    return true;
+}
+
+// Поиск файлов
 void SearchFiles(std::wstring directory, std::wstring target, HWND listbox, int filterIndex) {
     std::wstring query = directory + L"\\*";
-    WIN32_FIND_DATAW findData;
-    HANDLE hFind = FindFirstFileW(query.c_str(), &findData);
+    WIN32_FIND_DATAW fd;
+    HANDLE hFind = FindFirstFileW(query.c_str(), &fd);
+
     if (hFind == INVALID_HANDLE_VALUE) return;
 
     do {
-        std::wstring fileName = findData.cFileName;
-        if (fileName == L"." || fileName == L"..") continue;
-        std::wstring fullPath = directory + L"\\" + fileName;
+        std::wstring fn = fd.cFileName;
+        if (fn == L".." || fn == L".") continue;
 
-        if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-            SearchFiles(fullPath, target, listbox, filterIndex);
+        std::wstring fp = directory + L"\\" + fn;
+
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            SearchFiles(fp, target, listbox, filterIndex);
         } else {
-            std::wstring lowF = fileName; for(auto &c : lowF) c = towlower(c);
-            std::wstring lowT = target;   for(auto &c : lowT) c = towlower(c);
-            
-            if (lowF.find(lowT) != std::wstring::npos) {
-                if (CheckExtension(fileName, filterIndex)) {
-                    SendMessageW(listbox, LB_ADDSTRING, 0, (LPARAM)fullPath.c_str());
+            std::wstring lowFn = fn;
+            for(auto &c : lowFn) c = towlower(c);
+
+            if (lowFn.find(target) != std::wstring::npos) {
+                if (CheckExtension(fn, filterIndex)) {
+                    SendMessageW(listbox, LB_ADDSTRING, 0, (LPARAM)fp.c_str());
+                    
+                    // Чтобы окно не висло
+                    MSG msg;
+                    if (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
+                        TranslateMessage(&msg);
+                        DispatchMessage(&msg);
+                    }
                 }
             }
         }
-    } while (FindNextFileW(hFind, &findData));
+    } while (FindNextFileW(hFind, &fd));
     FindClose(hFind);
 }
 
+// Вывод автозагрузки
+void ShowStartupItems(HWND listbox) {
+    SendMessageW(listbox, LB_RESETCONTENT, 0, 0);
+    HKEY hKey;
+    LPCWSTR runs[] = {
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce"
+    };
+    HKEY roots[] = { HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE };
+
+    for (int r = 0; r < 2; r++) {
+        for (int i = 0; i < 2; i++) {
+            if (RegOpenKeyExW(roots[r], runs[i], 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+                wchar_t name[256], data[MAX_PATH];
+                DWORD nSize, dSize, type;
+                for (int j = 0; ; j++) {
+                    nSize = 256; dSize = MAX_PATH;
+                    if (RegEnumValueW(hKey, j, name, &nSize, NULL, &type, (LPBYTE)data, &dSize) != ERROR_SUCCESS) break;
+                    
+                    std::wstring entry = (roots[r] == HKEY_LOCAL_MACHINE ? L"[System] " : L"[User] ") 
+                                         + std::wstring(name) + L" -> " + data;
+                    SendMessageW(listbox, LB_ADDSTRING, 0, (LPARAM)entry.c_str());
+                }
+                RegCloseKey(hKey);
+            }
+        }
+    }
+}
+
+// Контекстное меню
 void ShowContextMenu(HWND hwnd, LPARAM lParam) {
     POINT pt = { LOWORD(lParam), HIWORD(lParam) };
     POINT ptClient = pt;
     ScreenToClient(hList, &ptClient);
+    
     LRESULT itemIndex = SendMessage(hList, LB_ITEMFROMPOINT, 0, MAKELPARAM(ptClient.x, ptClient.y));
     if (HIWORD(itemIndex) == 0) {
         SendMessage(hList, LB_SETCURSEL, LOWORD(itemIndex), 0);
         HMENU hMenu = CreatePopupMenu();
         AppendMenuW(hMenu, MF_STRING, ID_MENU_OPEN, L"Locate in Explorer");
+        AppendMenuW(hMenu, MF_STRING, ID_MENU_COPY, L"Copy Path");
+        AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
         AppendMenuW(hMenu, MF_STRING, ID_MENU_DELETE, L"Delete Permanent");
         TrackPopupMenu(hMenu, TPM_LEFTALIGN | TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, NULL);
         DestroyMenu(hMenu);
@@ -79,78 +146,101 @@ void ShowContextMenu(HWND hwnd, LPARAM lParam) {
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
         case WM_CREATE: {
-            SetProcessDPIAware(); // Четкий текст
-            HFONT hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+            SetProcessDPIAware();
+            hGuiFont = CreateFontW(16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, ANSI_CHARSET, 
+                                   OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, 
+                                   DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
 
-            CreateWindowExW(0, L"STATIC", L"Find name:", WS_VISIBLE | WS_CHILD, 10, 10, 150, 20, hwnd, NULL, NULL, NULL);
+            // Интерфейс
+            CreateWindowExW(0, L"STATIC", L"Find name:", WS_VISIBLE | WS_CHILD, 10, 10, 80, 20, hwnd, NULL, NULL, NULL);
             hEdit = CreateWindowExW(0, L"EDIT", L"", WS_VISIBLE | WS_CHILD | WS_BORDER, 10, 30, 200, 25, hwnd, (HMENU)ID_EDIT_INPUT, NULL, NULL);
             
-            CreateWindowExW(0, L"STATIC", L"Format:", WS_VISIBLE | WS_CHILD, 220, 10, 100, 20, hwnd, NULL, NULL, NULL);
-            hCombo = CreateWindowExW(0, WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_CHILD | WS_VISIBLE, 220, 30, 100, 200, hwnd, (HMENU)ID_COMBO_EXT, NULL, NULL);
+            CreateWindowExW(0, L"STATIC", L"Format:", WS_VISIBLE | WS_CHILD, 220, 10, 80, 20, hwnd, NULL, NULL, NULL);
+            hCombo = CreateWindowExW(0, WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_CHILD | WS_VISIBLE, 220, 30, 100, 300, hwnd, (HMENU)ID_COMBO_EXT, NULL, NULL);
+            
             const wchar_t* filters[] = { L"All", L".txt", L".bat", L"Archives" };
-            for(int i=0; i<4; i++) SendMessageW(hCombo, CB_ADDSTRING, 0, (LPARAM)filters[i]);
-            SendMessage(hCombo, CB_SETCURSEL, 0, 0);
+            for(int i = 0; i < 4; i++) SendMessageW(hCombo, CB_ADDSTRING, 0, (LPARAM)filters[i]);
+            SendMessageW(hCombo, CB_SETCURSEL, 0, 0);
 
-            hBtn = CreateWindowExW(0, L"BUTTON", L"Search Now", WS_VISIBLE | WS_CHILD, 330, 30, 140, 25, hwnd, (HMENU)ID_BTN_SEARCH, NULL, NULL);
-            hList = CreateWindowExW(0, L"LISTBOX", L"", WS_VISIBLE | WS_CHILD | WS_BORDER | WS_VSCROLL | LBS_NOTIFY, 10, 70, 460, 280, hwnd, (HMENU)ID_LIST_RESULTS, NULL, NULL);
+            HWND hSearchBtn = CreateWindowExW(0, L"BUTTON", L"Search Now", WS_VISIBLE | WS_CHILD, 330, 30, 140, 25, hwnd, (HMENU)ID_BTN_SEARCH, NULL, NULL);
+            hList = CreateWindowExW(0, L"LISTBOX", L"", WS_VISIBLE | WS_CHILD | WS_BORDER | WS_VSCROLL | LBS_NOTIFY, 10, 70, 460, 230, hwnd, (HMENU)ID_LIST_RESULTS, NULL, NULL);
+            
+            hFixBtn = CreateWindowExW(0, L"BUTTON", L"Fix System Restrictions", WS_VISIBLE | WS_CHILD, 10, 310, 460, 30, hwnd, (HMENU)ID_BTN_FIX_SYSTEM, NULL, NULL);
+            hStartBtn = CreateWindowExW(0, L"BUTTON", L"Show Startup Items", WS_VISIBLE | WS_CHILD, 10, 345, 460, 30, hwnd, (HMENU)ID_BTN_STARTUP, NULL, NULL);
 
-            SendMessageW(hEdit, WM_SETFONT, (WPARAM)hFont, TRUE);
-            SendMessageW(hCombo, WM_SETFONT, (WPARAM)hFont, TRUE);
-            SendMessageW(hBtn, WM_SETFONT, (WPARAM)hFont, TRUE);
-            SendMessageW(hList, WM_SETFONT, (WPARAM)hFont, TRUE);
+            // Применяем шрифт ко всему
+            EnumChildWindows(hwnd, [](HWND child, LPARAM font) -> BOOL {
+                SendMessage(child, WM_SETFONT, font, TRUE);
+                return TRUE;
+            }, (LPARAM)hGuiFont);
             break;
         }
-        case WM_CONTEXTMENU: if ((HWND)wParam == hList) ShowContextMenu(hwnd, lParam); break;
+        case WM_CONTEXTMENU: {
+            if ((HWND)wParam == hList) ShowContextMenu(hwnd, lParam);
+            break;
+        }
         case WM_COMMAND: {
-            int sel = SendMessage(hList, LB_GETCURSEL, 0, 0);
-            wchar_t path[MAX_PATH] = {0};
-            if (sel != LB_ERR) SendMessageW(hList, LB_GETTEXT, sel, (LPARAM)path);
-
             if (LOWORD(wParam) == ID_BTN_SEARCH) {
-                wchar_t buf[256]; GetWindowTextW(hEdit, buf, 256);
-                if (wcslen(buf) < 2) { MessageBoxW(hwnd, L"Too short!", L"Info", MB_OK); break; }
-                int filter = SendMessage(hCombo, CB_GETCURSEL, 0, 0);
+                wchar_t b[256]; GetWindowTextW(hEdit, b, 256);
+                if (wcslen(b) < 2) { MessageBoxW(hwnd, L"Too little!!", L"Error", MB_ICONWARNING); break; }
                 SendMessageW(hList, LB_RESETCONTENT, 0, 0);
-                
-                SearchFiles(L"C:\\Users", buf, hList, filter);
-
-                keybd_event(VK_CAPITAL, 0x3A, 0, 0);
-                keybd_event(VK_CAPITAL, 0x3A, KEYEVENTF_KEYUP, 0);
-                MessageBoxW(hwnd, L"Done!", L"Hunter", MB_OK);
+                std::wstring t = b; for(auto &c : t) c = towlower(c);
+                SearchFiles(L"C:\\Users", t, hList, SendMessage(hCombo, CB_GETCURSEL, 0, 0));
+                MessageBoxW(hwnd, L"Search Complete!", L"Done", MB_OK | MB_ICONINFORMATION);
+            }
+            else if (LOWORD(wParam) == ID_BTN_STARTUP) {
+                ShowStartupItems(hList);
+            }
+            else if (LOWORD(wParam) == ID_BTN_FIX_SYSTEM) {
+                // Твой код фикса из 1.2
+                if (!IsRunAsAdmin()) { MessageBoxW(hwnd, L"Need Admin Rights!", L"Error", MB_ICONERROR); break; }
+                HKEY k;
+                if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", 0, KEY_SET_VALUE, &k) == ERROR_SUCCESS) {
+                    DWORD v = 0;
+                    RegSetValueExW(k, L"DisableTaskMgr", 0, REG_DWORD, (const BYTE*)&v, sizeof(v));
+                    RegCloseKey(k);
+                    MessageBoxW(hwnd, L"Registry Fixed!", L"Success", MB_OK);
+                }
             }
             else if (LOWORD(wParam) == ID_MENU_OPEN) {
-                std::wstring cmd = L"/select,\"" + std::wstring(path) + L"\"";
-                ShellExecuteW(NULL, L"open", L"explorer.exe", cmd.c_str(), NULL, SW_SHOWNORMAL);
-            }
-            else if (LOWORD(wParam) == ID_MENU_DELETE) {
-                if (MessageBoxW(hwnd, L"Delete permanently?", L"Confirm", MB_YESNO) == IDYES) {
-                    if (DeleteFileW(path)) SendMessage(hList, LB_DELETESTRING, sel, 0);
+                int sel = SendMessage(hList, LB_GETCURSEL, 0, 0);
+                if (sel != LB_ERR) {
+                    wchar_t path[MAX_PATH]; SendMessageW(hList, LB_GETTEXT, sel, (LPARAM)path);
+                    std::wstring cmd = L"/select,\"" + std::wstring(path) + L"\"";
+                    ShellExecuteW(NULL, L"open", L"explorer.exe", cmd.c_str(), NULL, SW_SHOWNORMAL);
                 }
             }
             break;
         }
-        case WM_DESTROY: PostQuitMessage(0); break;
+        case WM_DESTROY: {
+            if (hGuiFont) DeleteObject(hGuiFont);
+            PostQuitMessage(0);
+            break;
+        }
         default: return DefWindowProcW(hwnd, uMsg, wParam, lParam);
     }
     return 0;
 }
 
-int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow) {
-    WNDCLASSW wc = { };
-    wc.lpfnWndProc = WindowProc;
-    wc.hInstance = hInstance;
+int WINAPI wWinMain(HINSTANCE h, HINSTANCE, PWSTR, int n) {
+    WNDCLASSW wc = {0}; 
+    wc.lpfnWndProc = WindowProc; 
+    wc.hInstance = h; 
     wc.lpszClassName = L"FileHunter";
-    wc.hIcon = LoadIconW(hInstance, MAKEINTRESOURCE(1));
+    wc.hIcon = LoadIconW(h, MAKEINTRESOURCE(1)); 
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     RegisterClassW(&wc);
 
-    HWND hwnd = CreateWindowExW(0, L"FileHunter", L"SimpleHunter v1.2", 
+    HWND hwnd = CreateWindowExW(0, L"FileHunter", L"SimpleHunter v1.3", 
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, 
-        CW_USEDEFAULT, CW_USEDEFAULT, 500, 420, NULL, NULL, hInstance, NULL);
+        CW_USEDEFAULT, CW_USEDEFAULT, 500, 430, NULL, NULL, h, NULL);
 
-    ShowWindow(hwnd, nCmdShow);
-    MSG msg;
-    while (GetMessageW(&msg, NULL, 0, 0)) { TranslateMessage(&msg); DispatchMessageW(&msg); }
+    ShowWindow(hwnd, n); 
+    MSG m;
+    while (GetMessageW(&m, NULL, 0, 0)) { 
+        TranslateMessage(&m); 
+        DispatchMessageW(&m); 
+    }
     return 0;
 }
