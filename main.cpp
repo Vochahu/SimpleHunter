@@ -192,7 +192,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 ShowStartupItems(hList);
             }
             else if (LOWORD(wParam) == ID_BTN_FIX_SYSTEM) {
-                // Твой код фикса из 1.2
                 if (!IsRunAsAdmin()) { MessageBoxW(hwnd, L"Need Admin Rights!", L"Error", MB_ICONERROR); break; }
                 HKEY k;
                 if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", 0, KEY_SET_VALUE, &k) == ERROR_SUCCESS) {
