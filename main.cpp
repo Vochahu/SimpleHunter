@@ -1,3 +1,5 @@
+// The project is no longer being updated.
+// Use this for the fork (probably).
 #ifndef UNICODE
 #define UNICODE
 #endif
@@ -11,7 +13,7 @@
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "shell32.lib")
 
-// Константы ID
+// ID
 #define ID_EDIT_INPUT 101
 #define ID_BTN_SEARCH 102
 #define ID_LIST_RESULTS 103
@@ -25,7 +27,7 @@
 HWND hEdit, hList, hCombo, hFixBtn, hStartBtn;
 HFONT hGuiFont = NULL;
 
-// Проверка прав Администратора
+// Checking
 bool IsRunAsAdmin() {
     BOOL fRet = FALSE;
     HANDLE hToken = NULL;
@@ -40,7 +42,7 @@ bool IsRunAsAdmin() {
     return fRet;
 }
 
-// Фильтрация расширений
+// idk
 bool CheckExtension(std::wstring fileName, int filterIndex) {
     if (filterIndex == 0) return true; // All
     
@@ -58,7 +60,7 @@ bool CheckExtension(std::wstring fileName, int filterIndex) {
     return true;
 }
 
-// Поиск файлов
+// Scan files
 void SearchFiles(std::wstring directory, std::wstring target, HWND listbox, int filterIndex) {
     std::wstring query = directory + L"\\*";
     WIN32_FIND_DATAW fd;
@@ -82,7 +84,7 @@ void SearchFiles(std::wstring directory, std::wstring target, HWND listbox, int 
                 if (CheckExtension(fn, filterIndex)) {
                     SendMessageW(listbox, LB_ADDSTRING, 0, (LPARAM)fp.c_str());
                     
-                    // Чтобы окно не висло
+                    // Window
                     MSG msg;
                     if (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
                         TranslateMessage(&msg);
@@ -95,7 +97,7 @@ void SearchFiles(std::wstring directory, std::wstring target, HWND listbox, int 
     FindClose(hFind);
 }
 
-// Вывод автозагрузки
+// Autorun
 void ShowStartupItems(HWND listbox) {
     SendMessageW(listbox, LB_RESETCONTENT, 0, 0);
     HKEY hKey;
@@ -124,7 +126,7 @@ void ShowStartupItems(HWND listbox) {
     }
 }
 
-// Контекстное меню
+// Context Menu
 void ShowContextMenu(HWND hwnd, LPARAM lParam) {
     POINT pt = { LOWORD(lParam), HIWORD(lParam) };
     POINT ptClient = pt;
@@ -151,7 +153,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                                    OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, 
                                    DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
 
-            // Интерфейс
+            // Interface
             CreateWindowExW(0, L"STATIC", L"Find name:", WS_VISIBLE | WS_CHILD, 10, 10, 80, 20, hwnd, NULL, NULL, NULL);
             hEdit = CreateWindowExW(0, L"EDIT", L"", WS_VISIBLE | WS_CHILD | WS_BORDER, 10, 30, 200, 25, hwnd, (HMENU)ID_EDIT_INPUT, NULL, NULL);
             
@@ -168,7 +170,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             hFixBtn = CreateWindowExW(0, L"BUTTON", L"Fix System Restrictions", WS_VISIBLE | WS_CHILD, 10, 310, 460, 30, hwnd, (HMENU)ID_BTN_FIX_SYSTEM, NULL, NULL);
             hStartBtn = CreateWindowExW(0, L"BUTTON", L"Show Startup Items", WS_VISIBLE | WS_CHILD, 10, 345, 460, 30, hwnd, (HMENU)ID_BTN_STARTUP, NULL, NULL);
 
-            // Применяем шрифт ко всему
+            // Font
             EnumChildWindows(hwnd, [](HWND child, LPARAM font) -> BOOL {
                 SendMessage(child, WM_SETFONT, font, TRUE);
                 return TRUE;
