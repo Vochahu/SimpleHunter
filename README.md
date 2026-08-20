@@ -7,3 +7,4 @@ My first simple program written in C++, There is the source code and the program
 ## WARNING
 I don't update the project anymore!
 So you can use my source code and create fork on my program.
+## !Works only on Windows!
